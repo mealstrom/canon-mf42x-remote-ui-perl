@@ -18,6 +18,7 @@ The public API is English. It does not depend on visible Remote UI labels. It us
 - Update E-Mail/I-Fax settings, including SMTP AUTH password.
 - List Address Book Favorites and Coded Dial entries.
 - Add e-mail destinations to Address Book.
+- Delete Address Book destinations with optional name guard.
 - Fetch raw Remote UI pages for diagnostics.
 
 ## Requirements
@@ -112,6 +113,18 @@ bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN
   --name Accounting \
   --email accounting@example.com
 ```
+
+Delete an Address Book destination:
+
+```sh
+bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN" \
+  address-book delete \
+  --book favorites \
+  --slot 5 \
+  --name Accounting
+```
+
+The optional `--name` and `--destination` guards make the command fail if the slot contains a different entry.
 
 ## Perl API Example
 

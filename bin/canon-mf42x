@@ -24,6 +24,7 @@ Commands:
   login-check
   address-book list [--book favorites|coded]
   address-book add-email [options]
+  address-book delete --book favorites|coded --slot N [--name NAME] [--destination VALUE]
   email-settings get
   email-settings set [options]
   raw-get --path PATH
@@ -160,6 +161,20 @@ if ($command eq 'address-book') {
         ) or usage();
         usage() unless defined $cmd{name} && defined $cmd{email};
         _print($api->add_email_destination(%cmd), $opt{json});
+        exit 0;
+    }
+
+    if ($subcommand eq 'delete') {
+        my %cmd = (book => 'favorites');
+        GetOptionsFromArray(
+            \@ARGV,
+            'book=s' => \$cmd{book},
+            'slot=i' => \$cmd{slot},
+            'name=s' => \$cmd{name},
+            'destination=s' => \$cmd{destination},
+        ) or usage();
+        usage() unless defined $cmd{slot};
+        _print($api->delete_address_book_entry(%cmd), $opt{json});
         exit 0;
     }
 }

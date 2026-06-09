@@ -8,7 +8,7 @@ use Encode qw(decode);
 use HTTP::Tiny;
 use URI::Escape qw(uri_escape_utf8);
 
-our $VERSION = '0.2.0';
+our $VERSION = '0.3.0';
 
 sub new {
     my ($class, %args) = @_;
@@ -277,6 +277,48 @@ sub add_email_destination {
     };
 }
 
+sub delete_address_book_entry {
+    my ($self, %args) = @_;
+
+    my $book = $args{book} || 'favorites';
+    my $slot = defined $args{slot} ? $args{slot} : croak 'slot is required';
+    my $expected_name = $args{name};
+    my $expected_destination = $args{destination};
+
+    my $entries = $self->address_book_list(book => $book);
+    my ($entry) = grep { $_->{slot} == $slot } @{$entries};
+    croak "slot $slot was not found in $book" unless $entry;
+    croak "slot $slot is not registered" unless $entry->{registered};
+
+    if (defined $expected_name && $entry->{name} ne $expected_name) {
+        croak "slot $slot name mismatch: expected '$expected_name', found '$entry->{name}'";
+    }
+
+    if (defined $expected_destination && $entry->{destination} ne $expected_destination) {
+        croak "slot $slot destination mismatch: expected '$expected_destination', found '$entry->{destination}'";
+    }
+
+    my $list_html = $self->get(_address_book_path($book))->{content};
+    my $list_token = _extract_token($list_html) || croak 'missing Address Book list token';
+
+    my $delete = $self->post_form(_address_book_delete_endpoint($book), {
+        iToken => $list_token,
+        i2210  => $slot,
+    });
+
+    return {
+        ok       => ($delete->{status} == 302 || $delete->{status} == 200),
+        status   => $delete->{status},
+        reason   => $delete->{reason},
+        location => $delete->{headers}{location},
+        book     => $book,
+        slot     => $slot,
+        name     => $entry->{name},
+        type     => $entry->{type},
+        destination => $entry->{destination},
+    };
+}
+
 sub parse_inputs {
     my ($html) = @_;
     my %inputs;
@@ -468,6 +510,13 @@ sub _address_book_open_endpoint {
     my ($book) = @_;
     return '/cgi/m_addresslist.cgi'    if $book eq 'favorites';
     return '/cgi/m_addresslistcod.cgi' if $book eq 'coded';
+    croak "unsupported Address Book: $book";
+}
+
+sub _address_book_delete_endpoint {
+    my ($book) = @_;
+    return '/cgi/m_address_delete.cgi'    if $book eq 'favorites';
+    return '/cgi/m_addresscod_delete.cgi' if $book eq 'coded';
     croak "unsupported Address Book: $book";
 }
 
