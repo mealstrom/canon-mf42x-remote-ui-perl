@@ -16,6 +16,8 @@ The public API is English. It does not depend on visible Remote UI labels. It us
 - Log in as System Manager.
 - Read E-Mail/I-Fax network settings.
 - Update E-Mail/I-Fax settings, including SMTP AUTH password.
+- List Address Book Favorites and Coded Dial entries.
+- Add e-mail destinations to Address Book.
 - Fetch raw Remote UI pages for diagnostics.
 
 ## Requirements
@@ -74,6 +76,43 @@ bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN
   --smtp-verify-certificate 0
 ```
 
+List Favorites in Address Book:
+
+```sh
+bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN" \
+  address-book list --book favorites --json
+```
+
+List the first Coded Dial page:
+
+```sh
+bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN" \
+  address-book list --book coded --json
+```
+
+Add an e-mail destination to the first empty Favorites slot:
+
+```sh
+bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN" \
+  address-book add-email \
+  --book favorites \
+  --name Accounting \
+  --email accounting@example.com
+```
+
+This command changes the live printer Address Book. It refuses to overwrite a registered slot.
+
+Add an e-mail destination to a specific Coded Dial slot:
+
+```sh
+bin/canon-mf42x --host 192.0.2.50 --id "$CANON_ADMIN_ID" --pin "$CANON_ADMIN_PIN" \
+  address-book add-email \
+  --book coded \
+  --slot 20 \
+  --name Accounting \
+  --email accounting@example.com
+```
+
 ## Perl API Example
 
 ```perl
@@ -101,6 +140,9 @@ Confirmed with Russian Remote UI:
 - Login endpoint: `/checkLogin.cgi`
 - E-Mail/I-Fax edit page: `/tx_email_ifax_edit.html`
 - E-Mail/I-Fax update endpoint: `/cgi/tx_email_ifax_edit.cgi`
+- Address Book Favorites page: `/a_addresslist.html`
+- Address Book Coded Dial page: `/a_addresslistcod.html`
+- Address Book E-Mail registration endpoint: `/cgi/a_email_regist.cgi`
 
 ## Safety Notes
 

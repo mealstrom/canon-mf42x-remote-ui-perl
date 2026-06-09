@@ -7,8 +7,12 @@ use FindBin;
 use lib "$FindBin::Bin/../lib";
 
 use Getopt::Long qw(GetOptionsFromArray);
-use JSON::PP qw(encode_json);
+use Getopt::Long qw(Configure);
+use JSON::PP ();
 use Canon::MF42x::RemoteUI;
+
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
 
 sub usage {
     print STDERR <<"USAGE";
@@ -18,6 +22,8 @@ Usage:
 Commands:
   language
   login-check
+  address-book list [--book favorites|coded]
+  address-book add-email [options]
   email-settings get
   email-settings set [options]
   raw-get --path PATH
@@ -55,6 +61,7 @@ my %opt = (
     timeout => 15,
 );
 
+Configure('pass_through');
 GetOptionsFromArray(
     \@ARGV,
     'host=s'    => \$opt{host},
@@ -64,6 +71,7 @@ GetOptionsFromArray(
     'timeout=i' => \$opt{timeout},
     'json'      => \$opt{json},
 ) or usage();
+Configure('no_pass_through');
 
 my $command = shift @ARGV || usage();
 
@@ -131,6 +139,31 @@ if ($command eq 'email-settings') {
     }
 }
 
+if ($command eq 'address-book') {
+    my $subcommand = shift @ARGV || usage();
+
+    if ($subcommand eq 'list') {
+        my %cmd = (book => 'favorites');
+        GetOptionsFromArray(\@ARGV, 'book=s' => \$cmd{book}) or usage();
+        _print_list($api->address_book_list(book => $cmd{book}), $opt{json});
+        exit 0;
+    }
+
+    if ($subcommand eq 'add-email') {
+        my %cmd = (book => 'favorites');
+        GetOptionsFromArray(
+            \@ARGV,
+            'book=s'  => \$cmd{book},
+            'slot=i'  => \$cmd{slot},
+            'name=s'  => \$cmd{name},
+            'email=s' => \$cmd{email},
+        ) or usage();
+        usage() unless defined $cmd{name} && defined $cmd{email};
+        _print($api->add_email_destination(%cmd), $opt{json});
+        exit 0;
+    }
+}
+
 usage();
 
 sub _client {
@@ -157,7 +190,7 @@ sub _print {
     my ($data, $json) = @_;
 
     if ($json) {
-        print encode_json($data), "\n";
+        print _json($data), "\n";
         return;
     }
 
@@ -166,4 +199,29 @@ sub _print {
         $value = $value ? 1 : 0 if $key =~ /^(?:ok|smtp_|pop_|apop)/ && $value =~ /^[01]\z/;
         print "$key=$value\n";
     }
+}
+
+sub _print_list {
+    my ($rows, $json) = @_;
+
+    if ($json) {
+        print _json($rows), "\n";
+        return;
+    }
+
+    for my $row (@{$rows}) {
+        print join "\t",
+            $row->{book},
+            $row->{number},
+            $row->{registered},
+            $row->{type},
+            $row->{name},
+            $row->{destination};
+        print "\n";
+    }
+}
+
+sub _json {
+    my ($data) = @_;
+    return JSON::PP->new->utf8(0)->canonical(1)->encode($data);
 }

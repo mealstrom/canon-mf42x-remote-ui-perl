@@ -4,10 +4,11 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
+use Encode qw(decode);
 use HTTP::Tiny;
 use URI::Escape qw(uri_escape_utf8);
 
-our $VERSION = '0.1.0';
+our $VERSION = '0.2.0';
 
 sub new {
     my ($class, %args) = @_;
@@ -197,6 +198,85 @@ sub set_email_ifax_settings {
     };
 }
 
+sub address_book_list {
+    my ($self, %args) = @_;
+    my $book = $args{book} || 'favorites';
+
+    my $res = $self->get(_address_book_path($book));
+    _assert_success($res, 'failed to fetch Address Book page');
+
+    return parse_address_book($res->{content}, book => $book);
+}
+
+sub add_email_destination {
+    my ($self, %args) = @_;
+
+    my $book = $args{book} || 'favorites';
+    my $name = defined $args{name} ? $args{name} : croak 'name is required';
+    my $email = defined $args{email} ? $args{email} : croak 'email is required';
+    my $slot = $args{slot};
+
+    croak 'name must be 16 characters or fewer' if length($name) > 16;
+    croak 'email must be 120 characters or fewer' if length($email) > 120;
+
+    my $entries = $self->address_book_list(book => $book);
+    if (!defined $slot) {
+        my ($empty) = grep { !$_->{registered} } @{$entries};
+        croak "no empty Address Book slot found in $book" unless $empty;
+        $slot = $empty->{slot};
+    }
+
+    my ($entry) = grep { $_->{slot} == $slot } @{$entries};
+    croak "slot $slot was not found in $book" unless $entry;
+    croak "slot $slot is already registered" if $entry->{registered};
+
+    my $list_html = $self->get(_address_book_path($book))->{content};
+    my $list_token = _extract_token($list_html) || croak 'missing Address Book list token';
+
+    my $open = $self->post_form(_address_book_open_endpoint($book), {
+        iToken => $list_token,
+        i2200  => $slot,
+    });
+
+    my $new_path = _location_path($open) || "/a_new.html?no=$slot";
+    my $new_page = $self->get($new_path);
+    _assert_success($new_page, 'failed to fetch Address Book destination type page');
+
+    my $new_token = _extract_token($new_page->{content}) || croak 'missing destination type token';
+
+    my $select = $self->post_form('/cgi/a_new.cgi', {
+        no     => $slot,
+        iToken => $new_token,
+        i2011  => 2,       # E-Mail
+        i2020  => $slot,
+    });
+
+    my $email_path = _location_path($select) || "/a_email_regist.html?no=$slot";
+    my $email_page = $self->get($email_path);
+    _assert_success($email_page, 'failed to fetch E-Mail destination form');
+
+    my $email_token = _extract_token($email_page->{content}) || croak 'missing E-Mail destination token';
+
+    my $save = $self->post_form('/cgi/a_email_regist.cgi', {
+        no     => $slot,
+        iToken => $email_token,
+        i2012  => $slot,
+        i2021  => $name,
+        i2032  => $email,
+    });
+
+    return {
+        ok       => ($save->{status} == 302 || $save->{status} == 200),
+        status   => $save->{status},
+        reason   => $save->{reason},
+        location => $save->{headers}{location},
+        book     => $book,
+        slot     => $slot,
+        name     => $name,
+        email    => $email,
+    };
+}
+
 sub parse_inputs {
     my ($html) = @_;
     my %inputs;
@@ -231,6 +311,56 @@ sub parse_inputs {
     return \%inputs;
 }
 
+sub parse_address_book {
+    my ($html, %args) = @_;
+    my $book = $args{book} || 'favorites';
+    my @entries;
+
+    while ($html =~ m{<tr>\s*(.*?)\s*</tr>}sig) {
+        my $row = $1;
+        next unless $row =~ /addressListLink\((\d+)\)/;
+        my $slot = $1;
+
+        my @cells = $row =~ m{<td[^>]*>(.*?)</td>}sig;
+        next unless @cells >= 4;
+
+        my $type_html = $cells[1];
+        my $name = _strip_html($cells[2]);
+        my $destination = _strip_html($cells[3]);
+        my $registered = $row =~ /ButtonDisable|disabled=/i ? 0 : 1;
+        my $type = 'unknown';
+
+        if ($type_html =~ m{/media/ad_dot\.png}i) {
+            $type = 'empty';
+            $registered = 0;
+        }
+        elsif ($type_html =~ m{/media/ad_1\.png}i) {
+            $type = 'email';
+        }
+        elsif ($type_html =~ m{/media/ad_2\.png}i) {
+            $type = 'ifax';
+        }
+        elsif ($type_html =~ m{/media/ad_6\.png}i) {
+            $type = 'file';
+        }
+        elsif ($type_html =~ m{/media/ad_grp\.png}i) {
+            $type = 'group';
+        }
+
+        push @entries, {
+            book        => $book,
+            slot        => 0 + $slot,
+            number      => sprintf('%02d', $slot),
+            type        => $type,
+            name        => $registered ? $name : '',
+            destination => $destination,
+            registered  => $registered ? 1 : 0,
+        };
+    }
+
+    return \@entries;
+}
+
 sub _request {
     my ($self, $method, $path, $form) = @_;
 
@@ -251,6 +381,10 @@ sub _request {
         headers => \%headers,
         content => $content,
     });
+
+    if (defined $res->{content} && _content_is_utf8($res->{headers})) {
+        $res->{content} = decode('UTF-8', $res->{content}, 1);
+    }
 
     $self->_store_cookies($res->{headers});
     return $res;
@@ -290,6 +424,12 @@ sub _form_encode {
     return join '&', @pairs;
 }
 
+sub _content_is_utf8 {
+    my ($headers) = @_;
+    my $content_type = $headers->{'content-type'} || '';
+    return $content_type =~ /charset\s*=\s*utf-?8/i ? 1 : 0;
+}
+
 sub _parse_attrs {
     my ($raw) = @_;
     my %attrs;
@@ -301,6 +441,45 @@ sub _parse_attrs {
     }
 
     return \%attrs;
+}
+
+sub _extract_token {
+    my ($html) = @_;
+    return $1 if $html =~ /name="iToken"\s+value="([0-9]+)"/;
+    return $1 if $html =~ /value="([0-9]+)"\s+name="iToken"/;
+    return undef;
+}
+
+sub _location_path {
+    my ($res) = @_;
+    my $location = $res->{headers}{location} || return undef;
+    $location =~ s{^https?://[^/]+}{};
+    return $location;
+}
+
+sub _address_book_path {
+    my ($book) = @_;
+    return '/a_addresslist.html'    if $book eq 'favorites';
+    return '/a_addresslistcod.html' if $book eq 'coded';
+    croak "unsupported Address Book: $book";
+}
+
+sub _address_book_open_endpoint {
+    my ($book) = @_;
+    return '/cgi/m_addresslist.cgi'    if $book eq 'favorites';
+    return '/cgi/m_addresslistcod.cgi' if $book eq 'coded';
+    croak "unsupported Address Book: $book";
+}
+
+sub _strip_html {
+    my ($html) = @_;
+    $html =~ s/<script\b.*?<\/script>//sig;
+    $html =~ s/<style\b.*?<\/style>//sig;
+    $html =~ s/<[^>]+>//g;
+    $html = _html_unescape($html);
+    $html =~ s/^\s+|\s+\z//g;
+    $html =~ s/\s+/ /g;
+    return $html;
 }
 
 sub _html_unescape {
