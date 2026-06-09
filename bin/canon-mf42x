@@ -1,0 +1,169 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP qw(encode_json);
+use Canon::MF42x::RemoteUI;
+
+sub usage {
+    print STDERR <<"USAGE";
+Usage:
+  canon-mf42x --host HOST --id ID --pin PIN command [options]
+
+Commands:
+  language
+  login-check
+  email-settings get
+  email-settings set [options]
+  raw-get --path PATH
+
+email-settings set options:
+  --smtp-server VALUE
+  --email-address VALUE
+  --pop-server VALUE
+  --pop-username VALUE
+  --pop-password VALUE
+  --pop-rx 0|1
+  --pop-interval VALUE
+  --pop-before-smtp 0|1
+  --apop 0|1
+  --smtp-auth 0|1
+  --smtp-username VALUE
+  --smtp-password VALUE
+  --smtp-tls 0|1
+  --smtp-verify-certificate 0|1
+  --smtp-add-cn-to-verification 0|1
+  --pop-tls 0|1
+  --pop-verify-certificate 0|1
+  --pop-add-cn-to-verification 0|1
+
+Global options:
+  --scheme http|https   default: http
+  --timeout SECONDS     default: 15
+  --json                output JSON for structured commands
+USAGE
+    exit 2;
+}
+
+my %opt = (
+    scheme  => 'http',
+    timeout => 15,
+);
+
+GetOptionsFromArray(
+    \@ARGV,
+    'host=s'    => \$opt{host},
+    'id=s'      => \$opt{id},
+    'pin=s'     => \$opt{pin},
+    'scheme=s'  => \$opt{scheme},
+    'timeout=i' => \$opt{timeout},
+    'json'      => \$opt{json},
+) or usage();
+
+my $command = shift @ARGV || usage();
+
+if ($command eq 'language') {
+    my $api = _client(\%opt, 0);
+    _print($api->detect_remote_ui_language, $opt{json});
+    exit 0;
+}
+
+if ($command eq 'raw-get') {
+    my %cmd;
+    GetOptionsFromArray(\@ARGV, 'path=s' => \$cmd{path}) or usage();
+    usage() unless $cmd{path};
+    my $api = _client(\%opt, 1);
+    my $res = $api->get($cmd{path});
+    print $res->{content};
+    exit 0;
+}
+
+my $api = _client(\%opt, 1);
+
+if ($command eq 'login-check') {
+    _print({ ok => 1, message => 'login successful' }, $opt{json});
+    exit 0;
+}
+
+if ($command eq 'email-settings') {
+    my $subcommand = shift @ARGV || usage();
+
+    if ($subcommand eq 'get') {
+        _print($api->email_ifax_settings, $opt{json});
+        exit 0;
+    }
+
+    if ($subcommand eq 'set') {
+        my %set;
+        GetOptionsFromArray(
+            \@ARGV,
+            'smtp-server=s'                 => \$set{smtp_server},
+            'email-address=s'               => \$set{email_address},
+            'pop-server=s'                  => \$set{pop_server},
+            'pop-username=s'                => \$set{pop_username},
+            'pop-password=s'                => \$set{pop_password},
+            'pop-rx=i'                      => \$set{pop_rx},
+            'pop-interval=i'                => \$set{pop_interval},
+            'pop-before-smtp=i'             => \$set{pop_before_smtp},
+            'apop=i'                        => \$set{apop},
+            'smtp-auth=i'                   => \$set{smtp_auth},
+            'smtp-username=s'               => \$set{smtp_username},
+            'smtp-password=s'               => \$set{smtp_password},
+            'smtp-tls=i'                    => \$set{smtp_tls},
+            'smtp-verify-certificate=i'     => \$set{smtp_verify_certificate},
+            'smtp-add-cn-to-verification=i' => \$set{smtp_add_cn_to_verification},
+            'pop-tls=i'                     => \$set{pop_tls},
+            'pop-verify-certificate=i'      => \$set{pop_verify_certificate},
+            'pop-add-cn-to-verification=i'  => \$set{pop_add_cn_to_verification},
+        ) or usage();
+
+        for my $key (keys %set) {
+            delete $set{$key} unless defined $set{$key};
+        }
+
+        _print($api->set_email_ifax_settings(%set), $opt{json});
+        exit 0;
+    }
+}
+
+usage();
+
+sub _client {
+    my ($opt, $login) = @_;
+    usage() unless $opt->{host};
+
+    my $api = Canon::MF42x::RemoteUI->new(
+        host    => $opt->{host},
+        scheme  => $opt->{scheme},
+        timeout => $opt->{timeout},
+    );
+
+    if ($login) {
+        usage() unless defined $opt->{id} && defined $opt->{pin};
+        my $login_result = $api->login_system_manager(id => $opt->{id}, pin => $opt->{pin});
+        die "login failed: HTTP $login_result->{status} $login_result->{reason}\n"
+            unless $login_result->{ok};
+    }
+
+    return $api;
+}
+
+sub _print {
+    my ($data, $json) = @_;
+
+    if ($json) {
+        print encode_json($data), "\n";
+        return;
+    }
+
+    for my $key (sort keys %{$data}) {
+        my $value = defined $data->{$key} ? $data->{$key} : '';
+        $value = $value ? 1 : 0 if $key =~ /^(?:ok|smtp_|pop_|apop)/ && $value =~ /^[01]\z/;
+        print "$key=$value\n";
+    }
+}
